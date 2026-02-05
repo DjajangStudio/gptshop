@@ -1,7 +1,5 @@
 import { createHmac } from 'crypto';
-import { db } from '@/db';
-import { shops } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { adminDb } from '@/lib/firebase-admin';
 
 interface ShopeeConfig {
     partnerId: number;
@@ -16,6 +14,13 @@ export class ShopeeClient {
     private shopId: number;
     private accessToken: string;
     private baseUrl = 'https://partner.test-stable.shopeemobile.com'; // Sandbox URL
+
+    constructor(config: ShopeeConfig) {
+        this.partnerId = config.partnerId;
+        this.partnerKey = config.partnerKey;
+        this.shopId = config.shopId;
+        this.accessToken = config.accessToken;
+    }
 
     // Static method for Auth (Token Exchange)
     static async getAccessToken(partnerId: number, partnerKey: string, code: string, shopId: number) {
@@ -41,32 +46,15 @@ export class ShopeeClient {
         return data; // { access_token, refresh_token, expire_in, ... }
     }
 
-    constructor(config: ShopeeConfig) {
-        this.partnerId = config.partnerId;
-        this.partnerKey = config.partnerKey;
-        this.shopId = config.shopId;
-        this.accessToken = config.accessToken;
-    }
-
     // Generate HMAC-SHA256 Signature
     private generateSignature(path: string, body: string, timestamp: number): string {
         const baseString = `${this.partnerId}${path}${timestamp}${this.accessToken}${this.shopId}`;
         return createHmac('sha256', this.partnerKey).update(baseString).digest('hex');
     }
 
-    // Generate Public Signature (for auth/token endpoints)
-    private generatePublicSignature(path: string, timestamp: number): string {
-        const baseString = `${this.partnerId}${path}${timestamp}`;
-        return createHmac('sha256', this.partnerKey).update(baseString).digest('hex');
-    }
-
     private async request(path: string, method: 'GET' | 'POST', body: any = {}) {
         const timestamp = Math.floor(Date.now() / 1000);
         const signature = this.generateSignature(path, JSON.stringify(body), timestamp);
-
-        // Check if token needs refresh (TODO: Implement actual check logic here if we had the DB record context)
-        // For now, we assume the accessToken passed in needs to be valid. 
-        // real-world implementation would check expiry before making this call.
 
         const url = new URL(path, this.baseUrl);
         url.searchParams.append('partner_id', this.partnerId.toString());
@@ -77,9 +65,7 @@ export class ShopeeClient {
 
         const response = await fetch(url.toString(), {
             method,
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: method === 'POST' ? JSON.stringify(body) : undefined,
         });
 
@@ -110,7 +96,6 @@ export class ShopeeClient {
     }
 
     async shipOrder(orderSn: string) {
-        // For Non-Integrated Shipping (Jasa Kirim Toko), we use the order_sn as the tracking number (resi)
         return this.request('/api/v2/logistics/ship_order', 'POST', {
             order_sn: orderSn,
             package_list: [
@@ -126,9 +111,7 @@ export class ShopeeClient {
         return this.request('/api/v2/sellerchat/send_message', 'POST', {
             to_id: toId,
             message_type: 'text',
-            content: {
-                text: content
-            }
+            content: { text: content }
         });
     }
 
@@ -149,31 +132,34 @@ export class ShopeeClient {
 // === UTILS ===
 
 export function verifyWebhookSignature(details: {
-    url: string; // The full URL including protocol and path
-    body: string; // Raw body string
-    signature: string; // The signature from headers
+    url: string;
+    body: string;
+    signature: string;
     partnerKey: string;
 }) {
-    // Shopee Webhook Signature: HMAC-SHA256(url + | + body, partner_key)
     const baseString = `${details.url}|${details.body}`;
     const generated = createHmac('sha256', details.partnerKey).update(baseString).digest('hex');
     return generated === details.signature;
 }
 
 export async function getShopClient(shopId: number) {
-    const shop = await db.query.shops.findFirst({
-        where: eq(shops.shopId, shopId)
-    });
+    // FETCH FROM FIRESTORE
+    const shopQuery = await adminDb.collection('shops')
+        .where('shopeeShopId', '==', shopId)
+        .limit(1)
+        .get();
 
-    if (!shop) throw new Error('Shop not found');
+    if (shopQuery.empty) throw new Error('Shop not found in Firestore');
 
-    // TODO: Check for token expiry and refresh if needed
-    // if (shop.tokenExpiresAt < new Date()) { ...refresh logic... }
+    const shopData = shopQuery.docs[0].data();
+
+    // TODO: Refresh logic here if expired
+    // if (shopData.tokenExpiresAt.toDate() < new Date()) { ... }
 
     return new ShopeeClient({
-        partnerId: parseInt(shop.partnerId),
-        partnerKey: shop.partnerKey,
-        shopId: shop.shopId,
-        accessToken: shop.accessToken || '',
+        partnerId: parseInt(shopData.partnerId),
+        partnerKey: shopData.partnerKey,
+        shopId: shopData.shopeeShopId,
+        accessToken: shopData.accessToken || '',
     });
 }

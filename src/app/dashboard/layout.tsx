@@ -76,8 +76,8 @@ export default function DashboardLayout({
                     </div>
                     <div className="flex items-center gap-2">
                         <div className="flex items-center gap-2 text-sm text-muted-foreground bg-white px-3 py-1 rounded-full border shadow-sm">
-                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                            DrizzleORM Connected
+                            <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
+                            Firebase Connected
                         </div>
                     </div>
                 </header>

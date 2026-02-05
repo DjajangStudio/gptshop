@@ -1,19 +1,6 @@
-import { betterAuth } from "better-auth";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { db } from "@/db"; // your drizzle instance
+// Stub for Auth (Refactored to Firebase)
+// Logic should move to src/lib/firebase-admin.ts or client-side SDK
 
-export const auth = betterAuth({
-    database: drizzleAdapter(db, {
-        provider: "pg", // or "mysql", "sqlite"
-    }),
-    emailAndPassword: {
-        enabled: true,
-    },
-    // Social providers if needed
-    // socialProviders: {
-    //     google: {
-    //         clientId: process.env.GOOGLE_CLIENT_ID!,
-    //         clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-    //     },
-    // },
-});
+export const auth = {
+    // Placeholder
+};
