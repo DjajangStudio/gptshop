@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/db';
-import { shops } from '@/db/schema'; // Ensure you have shops table imported
+import { adminDb } from '@/lib/firebase-admin';
 import { ShopeeClient } from '@/lib/shopee';
-import { eq } from 'drizzle-orm';
 
 export async function GET(req: NextRequest) {
     const searchParams = req.nextUrl.searchParams;
@@ -28,59 +26,50 @@ export async function GET(req: NextRequest) {
         }
 
         // 1. Exchange Code for Token
+        console.log(`Exchanging code for shop ${shopId}...`);
         const tokenData = await ShopeeClient.getAccessToken(partnerId, partnerKey, code, shopId);
+        console.log("Token received:", tokenData);
 
-        // 2. Save/Update in DB
-        // Check if shop exists (by shopId) to support multi-shop or re-auth
-        // We use shopId (bigint) as unique key
+        // 2. Save/Update in Firestore
+        const shopsRef = adminDb.collection('shops');
+        const snapshot = await shopsRef.where('shopeeShopId', '==', shopId).limit(1).get();
 
-        // First, check if we have a user associated. For now, we might rely on a "default" user or just upsert.
-        // Since we don't have a logged-in session context easily here (unless we used state param),
-        // we will assume a single-user system or find the shop if it exists.
+        const tokenExpires = new Date(Date.now() + (tokenData.expire_in * 1000));
 
-        // Strategy: 
-        // If shop exists, update tokens.
-        // If shop does not exist, we need a userId. 
-        // fallback: Pick the first user in DB (Admin) or reject.
-
-        const existingShop = await db.query.shops.findFirst({
-            where: eq(shops.shopId, shopId)
-        });
-
-        if (existingShop) {
-            await db.update(shops).set({
+        if (!snapshot.empty) {
+            // Update existing shop
+            const docId = snapshot.docs[0].id;
+            await shopsRef.doc(docId).update({
                 accessToken: tokenData.access_token,
                 refreshToken: tokenData.refresh_token,
-                tokenExpiresAt: new Date(Date.now() + (tokenData.expire_in * 1000)),
-                isActive: true, // Re-enable if disabled
+                tokenExpiresAt: tokenExpires,
+                isActive: true,
                 updatedAt: new Date()
-            }).where(eq(shops.shopId, shopId));
+            });
+            console.log(`Updated shop ${shopId} (Doc ID: ${docId})`);
         } else {
-            // New Shop Connection
-            // Find a user to attach to
-            const user = await db.query.users.findFirst();
-            if (!user) {
-                // If no user exists, maybe creating one via seed is needed, or we error out
-                return NextResponse.json({ error: 'System Error: No user account found to attach shop. Please sign up first.' }, { status: 500 });
-            }
+            // Create New Shop
+            // Since we don't have a user session yet, we create an 'orphan' shop or assign to a default admin
+            // Ideally, you should implement state parameter to pass userId
 
-            await db.insert(shops).values({
-                userId: user.id,
-                shopId: shopId,
-                shopName: `Shop ${shopId}`, // Placeholder, fetch details later
+            await shopsRef.add({
+                userId: 'admin_placeholder', // TODO: Fix with real Auth
+                shopeeShopId: shopId,
+                shopName: `Shop ${shopId}`,
                 partnerId: partnerId.toString(),
                 partnerKey: partnerKey,
                 accessToken: tokenData.access_token,
                 refreshToken: tokenData.refresh_token,
-                tokenExpiresAt: new Date(Date.now() + (tokenData.expire_in * 1000)),
+                tokenExpiresAt: tokenExpires,
                 isActive: true,
+                createdAt: new Date(),
                 settings: {
                     autoFulfillment: true,
                     autoReply: true,
-                    autoRating: false, // Safer default
                     autoBoost: true
                 }
             });
+            console.log(`Created new shop document for ${shopId}`);
         }
 
         // 3. Redirect to Dashboard
